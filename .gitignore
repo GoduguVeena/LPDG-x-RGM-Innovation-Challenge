@@ -1,0 +1,30 @@
+# Challenge dataset - NEVER COMMIT
+data/
+
+# Generated predictions
+predictions*.csv
+outputs/*
+!outputs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment/secrets
+.env
+.env.*
+
+# Docker
+*.log
