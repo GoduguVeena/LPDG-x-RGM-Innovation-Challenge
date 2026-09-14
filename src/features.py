@@ -19,6 +19,20 @@ TELEMETRY_FEATURES = [
     "reboot_importance",
 ]
 
+def normalize_gateway_id(series):
+    """
+    Normalize gateway IDs so formats such as
+    0639EA5602C1 and 06:39:EA:56:02:C1
+    are treated as the same gateway.
+    """
+    return (
+        series
+        .astype(str)
+        .str.replace(":", "", regex=False)
+        .str.replace("-", "", regex=False)
+        .str.strip()
+        .str.upper()
+    )
 
 def load_telemetry(data_dir):
     """Load and combine all monthly telemetry partitions."""
@@ -37,6 +51,10 @@ def load_telemetry(data_dir):
         telemetry["ts_utc"], utc=True
     )
 
+    telemetry["gateway_id"] = normalize_gateway_id(
+    telemetry["gateway_id"]
+)
+
     # Duplicate telemetry rows exist in the source.
     # Remove exact duplicates for feature calculation.
     telemetry = telemetry.drop_duplicates()
@@ -49,6 +67,10 @@ def load_meter_read_success(data_dir):
     path = Path(data_dir) / "meter_read_success.csv"
 
     meter = pd.read_csv(path)
+
+    meter["gateway_id"] = normalize_gateway_id(
+    meter["gateway_id"]
+)
 
     meter["week_start"] = pd.to_datetime(
         meter["week_start"], utc=True
@@ -120,6 +142,9 @@ def build_features_for_week(telemetry, week_start):
             days,
         )
 
+        if window_features.empty:
+            continue
+
         if result is None:
             result = window_features
         else:
@@ -129,10 +154,14 @@ def build_features_for_week(telemetry, week_start):
                 how="outer",
             )
 
+    if result is None:
+        return pd.DataFrame(
+            columns=["gateway_id", "week_start"]
+        )
+
     result["week_start"] = week_start
 
     return result
-
 
 def build_training_dataset(data_dir):
     """
@@ -178,3 +207,55 @@ def build_training_dataset(data_dir):
     )
 
     return dataset
+def build_prediction_features(data_dir, week_start):
+    """
+    Build ML features for prediction for one target week.
+
+    Only telemetry strictly before `week_start` is used.
+    The gateway universe comes from gateway_master.csv so that
+    gateways with missing/quiet telemetry do not disappear.
+    """
+    telemetry = load_telemetry(data_dir)
+
+    week_start = pd.Timestamp(week_start)
+
+    if week_start.tzinfo is None:
+        week_start = week_start.tz_localize("UTC")
+    else:
+        week_start = week_start.tz_convert("UTC")
+
+    # Build the same 69 features used during training.
+    features = build_features_for_week(
+        telemetry,
+        week_start,
+    )
+
+    # Use gateway_master as the candidate gateway universe.
+    master_path = Path(data_dir) / "gateway_master.csv"
+    master = pd.read_csv(
+    master_path,
+    encoding="latin1",
+)
+
+    if "gateway_id" not in master.columns:
+        raise ValueError(
+            "gateway_master.csv must contain a gateway_id column"
+        )
+
+    gateways = master[["gateway_id"]].drop_duplicates().copy()
+
+    gateways["gateway_id"] = normalize_gateway_id(
+    gateways["gateway_id"]
+)
+
+    # Keep every gateway, including gateways with no telemetry
+    # in the prediction window.
+    features = gateways.merge(
+        features,
+        on="gateway_id",
+        how="left",
+    )
+
+    features["week_start"] = week_start
+
+    return features
