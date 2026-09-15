@@ -1,169 +1,211 @@
-# AI Usage
+# AI-USAGE.md
 
-AI was used as a supporting development tool throughout this project. I used it
-mainly as a technical discussion partner while understanding the challenge,
-exploring approaches, debugging implementation issues, interpreting results,
-and improving the project documentation.
+## How I Used AI
 
-I also used AI to generate or suggest parts of code when needed, but I tested
-the code locally, checked the outputs against the challenge requirements, and
-made changes based on the actual behaviour of the implementation.
+I used AI as a supporting tool during this project, mainly to get another
+perspective while I was working through the challenge.
 
-## Examples of How I Used AI
+I did not use AI as a replacement for understanding the problem, working with
+the data, running experiments, or making the final technical decisions.
 
-### 1. Understanding the challenge and evaluation criteria
+The code and results in this repository were run and checked by me on the
+provided challenge data.
 
-At the beginning, I used AI to break down the challenge requirements and
-understand what the evaluation was actually measuring.
+---
 
-For example, I discussed:
+## 1. Understanding the Challenge
 
-- How the 15-gateway weekly selection should work.
-- Why the operational cost matters more than a conventional accuracy metric.
-- How the €380 wasted-visit cost and €600 per-week missed-fault cost affect
-  the ranking problem.
-- What temporal validation and unseen-gateway validation mean for this
-  particular dataset.
-- What kinds of data leakage could occur when using telemetry from the target
-  week.
+I first read the challenge brief and worked through the requirements,
+constraints, costs, data, and expected outputs myself.
 
-This helped me form a clearer understanding of the problem before deciding
-which experiments to run.
+After forming my own understanding, I used AI to discuss the problem and to
+get another perspective on possible approaches and things I might have
+overlooked.
 
-### 2. Feature engineering discussions
+I then compared those suggestions with the actual challenge requirements.
 
-I used AI to discuss possible telemetry features and different ways of
-aggregating the hourly gateway data.
+The final interpretation of the problem and the decisions made in the
+project were my own.
 
-Examples included discussing:
+---
 
-- 7-day, 14-day and 28-day historical windows.
-- Offline duration and disconnection behaviour.
-- Reboots and reboot duration.
-- Online duration.
-- RSSI-related features.
-- Telemetry coverage as a feature.
-- Whether recent trends should be added to the base feature set.
+## 2. Understanding the Data
 
-I then implemented and tested these ideas on the actual dataset rather than
-assuming that every suggested feature would improve the solution.
+I spent time exploring the provided datasets before building the ML solution.
 
-### 3. Model selection
+I inspected the schemas, time ranges, relationships between the datasets, and
+the available gateway information myself.
 
-I used AI to compare possible approaches for the ML track, including simpler
-models and more complex alternatives.
+While working with the data, I used AI when I had questions about Python,
+pandas, data processing, or possible ways to analyse a particular pattern.
 
-The final model is Logistic Regression because it provided a good balance
-between predictive performance, operational cost, interpretability and
-reproducibility for this problem.
+I did not assume that an AI suggestion was correct. I checked the suggested
+approach against the actual data and the challenge requirements before using
+it.
 
-AI was useful in discussing the trade-offs, but the final choice was based on
-the experiments I ran and the validation results.
+---
 
-### 4. Debugging and implementation
+## 3. EDA and Feature Engineering
 
-AI was also used while implementing the Python pipeline.
+AI was mainly useful to me as a second perspective during EDA and feature
+engineering.
 
-For example, I used it to help debug issues involving:
+I used it to:
 
-- Pandas data processing and merging.
-- Timestamp and timezone handling.
-- Gateway ID normalization.
-- Building historical feature windows without using future information.
-- Training and scoring the model.
-- Deterministic ranking of gateways.
-- Generating the required `predictions.csv`.
-- Docker execution and validation.
+- understand Python and pandas errors,
+- discuss possible causes of unexpected results,
+- consider alternative ways of analysing patterns,
+- discuss possible feature-engineering ideas,
+- and help reason about implementation issues.
 
-When an issue was suggested or a code change was generated, I ran it locally
-and checked whether the resulting output was actually correct.
+I then implemented and tested the relevant ideas myself.
 
-### 5. Leakage and validation checks
+The EDA findings documented in this repository are based on experiments I
+actually ran on the challenge data.
 
-One important use of AI was to challenge my assumptions about whether the
-model evaluation was valid.
+For example, I checked telemetry behaviour, failure-rate patterns, telemetry
+coverage, gateway behaviour over time, and the relationship between telemetry
+features and failures.
 
-I discussed questions such as:
+---
 
-- Could target-week telemetry accidentally enter the features?
-- Is using field-visit outcomes as labels appropriate?
-- Does a random row split create gateway leakage?
-- How should unseen gateways be evaluated?
-- How should future weeks be handled?
-- Does a lower AUC necessarily mean a higher operational cost, or vice versa?
+## 4. Model Selection and Experimentation
 
-These discussions led me to perform additional experiments and audits instead
-of relying on a single train/test result.
+I used AI to discuss possible modelling approaches and feature ideas.
 
-### 6. Comparing ML with the supplied baseline
+However, suggestions were treated as hypotheses to test rather than as final
+answers.
 
-I used AI to help structure the cost-based comparison between my ML ranking and
-the supplied 3-sigma baseline.
+The final model and feature choices were made based on the experiments and
+validation results I obtained.
 
-The important part was understanding that the objective is not simply to
-maximize classification accuracy. I therefore compared the two approaches
-using the challenge's operational cost definition over the complete temporal
-validation period.
+One example was the experiment with additional trend-based features.
 
-The final validation result was:
+The trend features initially looked promising on one fixed validation setup:
 
-- ML: €129,600
-- 3-sigma baseline: €130,800
-- Difference: €1,200 lower cost for ML
+Base model  -> €129,600
+Trend model -> €127,800
 
-I used the actual experiment output as the basis for this conclusion.
+Instead of accepting that result immediately, I tested the approach using a
+walk-forward evaluation as well.
 
-### 7. Investigating model behaviour
+The result changed:
 
-After obtaining the initial results, I used AI to suggest questions that could
-help me understand where the model was succeeding or failing.
+Base model  -> €208,300
+Trend model -> €211,240
 
-This led to additional analysis of:
+Since the trend-based version had a higher cost in the walk-forward
+evaluation, I rejected it and kept the simpler 69-feature Logistic Regression
+model.
 
-- Persistent severe gateways.
-- Fault episodes.
-- Early detection behaviour.
-- Unseen gateways.
-- Different time periods.
-- Feature coverage.
-- Alternative ranking transformations.
-- Trend features.
+This was an important part of my modelling process: I used AI suggestions to
+generate ideas, but relied on experiments and validation to decide whether an
+idea should actually be used.
 
-Some experiments improved one metric but did not improve the final operational
-cost. I therefore did not automatically include every experiment in the final
-pipeline.
+---
 
-For example, trend features improved some fixed-split metrics, but the
-walk-forward cost comparison did not improve over the base model. This was one
-reason I kept the simpler 69-feature base model as the final candidate.
+## 5. Debugging and Implementation
 
-### 8. Documentation and presentation
+During implementation, I used AI to help understand errors and think through
+implementation problems.
 
-I also used AI while writing and organizing:
+This included issues related to:
 
-- `README.md`
-- `DECISIONS.md`
-- `AI-USAGE.md`
-- Explanations of experiments and limitations.
-- Visualization descriptions.
-- Docker usage instructions.
+- pandas and data processing,
+- feature construction,
+- model training,
+- validation,
+- Git and repository workflow,
+- and making the prediction pipeline easier to run.
 
-AI helped me structure the information and improve clarity, while I checked
-the documentation against the actual code and experiment results.
+When AI suggested a solution, I tested it in my environment before keeping
+the change.
 
-## What I Learned From Using AI
+I also checked that changes did not introduce data leakage or violate the
+challenge requirements.
 
-Using AI was most useful when I treated it as something I could question and
-discuss ideas with rather than as a replacement for running experiments.
+---
 
-A suggestion could look reasonable but still perform poorly on the actual
-dataset. In several cases, I had to test an idea, look at the resulting
-metrics or operational cost, and then decide whether to keep or reject it.
+## 6. Validation and Final Decisions
 
-This was particularly important for this challenge because the best-looking
-ML metric was not always the same as the best operational decision.
+AI did not determine the final model performance or validation results.
 
-Overall, AI was part of my development workflow for learning, coding,
-debugging, experimentation, validation and documentation. The dataset,
-experiments, outputs and final decisions were all checked as part of my own
-development process.
+I ran the experiments myself and used the results to make the final
+decisions.
+
+In particular, I considered:
+
+- operational cost rather than accuracy alone,
+- temporal validation,
+- unseen-gateway validation,
+- feature coverage,
+- model simplicity,
+- and the risk of relying on patterns that may not generalize.
+
+The final decisions are documented separately in `DECISIONS.md`.
+
+---
+
+## 7. Documentation
+
+I used AI to help review and organize some documentation and to make some
+technical explanations clearer.
+
+The technical findings, experiment results, limitations, and final decisions
+in the repository are based on the work I performed and verified.
+
+AI was used as a writing and review aid, not as a source for inventing
+results.
+
+---
+
+## One Thing AI Got Wrong
+
+One useful example happened while I was exploring additional trend-based
+features.
+
+AI suggested that adding trend information could help the model capture
+changes in gateway behaviour.
+
+I implemented and tested the idea.
+
+The trend version initially looked better on one fixed validation experiment:
+
+Base model  -> €129,600
+Trend model -> €127,800
+
+However, I tested the idea further using walk-forward evaluation.
+
+The result was:
+
+Base model  -> €208,300
+Trend model -> €211,240
+
+The trend model therefore performed worse in that evaluation.
+
+I rejected the trend features and kept the simpler model.
+
+This reinforced an important lesson for me: an approach that looks better on
+one validation result should not automatically be considered better. It needs
+to be tested under more realistic evaluation conditions.
+
+---
+
+## Overall
+
+AI was a supporting tool throughout this project.
+
+I mainly used it for:
+
+- getting another perspective on the problem,
+- discussing possible approaches,
+- understanding technical errors,
+- debugging implementation issues,
+- exploring feature ideas,
+- and reviewing documentation.
+
+I remained responsible for understanding the data, running the experiments,
+checking the results, and making the final technical decisions.
+
+The final solution reflects the approaches that I tested and found reasonable
+for the challenge, rather than simply accepting AI-generated suggestions.
