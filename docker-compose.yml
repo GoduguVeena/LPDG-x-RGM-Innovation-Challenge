@@ -6,9 +6,9 @@ services:
       - ./outputs:/app/outputs
     command: >
       sh -c "
-      python baseline_3sigma.py
-      --data /app/data
-      --out /app/outputs/predictions.csv
+      python src/final_predict.py
+      &&
+      cp /app/predictions.csv /app/outputs/predictions.csv
       &&
       python validate_submission.py
       /app/outputs/predictions.csv
