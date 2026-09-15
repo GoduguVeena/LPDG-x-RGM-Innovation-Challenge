@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 
 import pandas as pd
 
@@ -16,18 +17,42 @@ from features import (
 TARGET_THRESHOLD = 0.30
 VISITS_PER_WEEK = 15
 
-SCORED_WEEKS = pd.date_range(
-    start="2026-02-02",
-    periods=8,
-    freq="7D",
-    tz="UTC",
-)
+# Default Part 1 submission period.
+# Running the script without arguments produces the required
+# 8 weeks from 2026-02-02 to 2026-03-23.
+DEFAULT_START_WEEK = "2026-02-02"
+DEFAULT_NUM_WEEKS = 8
+
+
+def get_scored_weeks(start_week=DEFAULT_START_WEEK, num_weeks=DEFAULT_NUM_WEEKS):
+    """
+    Return the weeks for which predictions should be generated.
+
+    Defaults to the exact Part 1 submission period, while allowing
+    another prediction period for unseen-month evaluation.
+    """
+
+    if num_weeks < 1:
+        raise ValueError("num_weeks must be at least 1")
+
+    start_week = pd.Timestamp(start_week)
+
+    if start_week.tzinfo is None:
+        start_week = start_week.tz_localize("UTC")
+    else:
+        start_week = start_week.tz_convert("UTC")
+
+    return pd.date_range(
+        start=start_week,
+        periods=num_weeks,
+        freq="7D",
+    )
 
 
 def train_final_model(dataset):
     """
-    Train the final ML model using all available historical
-    labelled gateway-weeks.
+    Train the final ML model using historical labelled
+    gateway-weeks only.
     """
 
     dataset = dataset.copy()
@@ -111,7 +136,9 @@ def build_reason(row):
         coverage = row["telemetry_hours_7d"]
 
         if coverage < 100:
-            reasons.append("limited recent telemetry coverage")
+            reasons.append(
+                "limited recent telemetry coverage"
+            )
 
     if not reasons:
         return "Risk score based on available gateway telemetry"
@@ -157,7 +184,7 @@ def predict_week(
     prediction_features["score"] = probabilities
 
     # Deterministic ordering:
-    # 1. highest risk probability
+    # 1. highest predicted risk
     # 2. gateway_id alphabetically for ties
     prediction_features = prediction_features.sort_values(
         ["score", "gateway_id"],
@@ -179,7 +206,9 @@ def predict_week(
         VISITS_PER_WEEK + 1,
     )
 
-    selected["week_start"] = week_start.date().isoformat()
+    selected["week_start"] = (
+        week_start.date().isoformat()
+    )
 
     selected["reason"] = selected.apply(
         build_reason,
@@ -197,24 +226,66 @@ def predict_week(
     ]
 
 
-def build_predictions(data_dir):
+def build_predictions(data_dir, scored_weeks=None):
     """
     Train on historical labelled data and generate
-    predictions for all eight scored weeks.
+    predictions for the requested prediction weeks.
+
+    Training labels from the prediction period and any
+    later weeks are excluded to prevent target leakage.
     """
+
+    if scored_weeks is None:
+        scored_weeks = get_scored_weeks()
+
+    scored_weeks = list(scored_weeks)
+
+    if not scored_weeks:
+        raise ValueError(
+            "At least one prediction week is required"
+        )
+
+    first_prediction_week = pd.Timestamp(
+        scored_weeks[0]
+    )
 
     print("==========================================")
     print("FINAL ML PREDICTION PIPELINE")
     print("==========================================")
 
+    print("\nPrediction period:")
+    print(
+        f"{first_prediction_week.date()} "
+        f"to "
+        f"{pd.Timestamp(scored_weeks[-1]).date()}"
+    )
+
     print("\nBuilding historical training dataset...")
 
-    training_dataset = build_training_dataset(
+    full_training_dataset = build_training_dataset(
         data_dir
     )
 
+    # Use only labels strictly before the first
+    # prediction week.
+    training_dataset = full_training_dataset[
+        full_training_dataset["week_start"]
+        < first_prediction_week
+    ].copy()
+
+    if training_dataset.empty:
+        raise ValueError(
+            "No historical training rows exist before "
+            "the requested prediction period"
+        )
+
     print(
-        "Training dataset shape:",
+        "Full labelled dataset shape:",
+        full_training_dataset.shape,
+    )
+
+    print(
+        "Leakage-safe training dataset shape:",
         training_dataset.shape,
     )
 
@@ -224,7 +295,14 @@ def build_predictions(data_dir):
 
     all_predictions = []
 
-    for week_start in SCORED_WEEKS:
+    for week_start in scored_weeks:
+
+        week_start = pd.Timestamp(week_start)
+
+        if week_start.tzinfo is None:
+            week_start = week_start.tz_localize("UTC")
+        else:
+            week_start = week_start.tz_convert("UTC")
 
         print(
             f"\nGenerating predictions for "
@@ -274,25 +352,14 @@ def build_predictions(data_dir):
     return predictions
 
 
-def main():
-    repo_root = Path(__file__).resolve().parent.parent
-
-    data_dir = repo_root / "data"
-
-    output_path = repo_root / "predictions.csv"
-
-    if not data_dir.exists():
-        raise FileNotFoundError(
-            f"Data directory not found: {data_dir}"
-        )
-
-    predictions = build_predictions(
-        data_dir
-    )
-
-    # ---------------------------------------------------------
-    # Final structural checks
-    # ---------------------------------------------------------
+def validate_predictions(
+    predictions,
+    expected_weeks,
+):
+    """
+    Validate the structural requirements of the generated
+    prediction file.
+    """
 
     expected_columns = [
         "week_start",
@@ -308,20 +375,46 @@ def main():
             f"{list(predictions.columns)}"
         )
 
-    if len(predictions) != 120:
+    expected_week_count = len(expected_weeks)
+
+    expected_row_count = (
+        expected_week_count * VISITS_PER_WEEK
+    )
+
+    if len(predictions) != expected_row_count:
         raise ValueError(
-            f"Expected 120 prediction rows, "
+            f"Expected {expected_row_count} prediction rows, "
             f"found {len(predictions)}"
         )
 
-    if predictions["week_start"].nunique() != 8:
+    if (
+        predictions["week_start"].nunique()
+        != expected_week_count
+    ):
         raise ValueError(
-            "Expected predictions for exactly 8 weeks"
+            f"Expected predictions for exactly "
+            f"{expected_week_count} weeks"
+        )
+
+    expected_week_strings = {
+        pd.Timestamp(week).date().isoformat()
+        for week in expected_weeks
+    }
+
+    actual_week_strings = set(
+        predictions["week_start"].astype(str)
+    )
+
+    if actual_week_strings != expected_week_strings:
+        raise ValueError(
+            "Prediction weeks do not match the "
+            "requested prediction period"
         )
 
     for week, group in predictions.groupby(
         "week_start"
     ):
+
         if len(group) != VISITS_PER_WEEK:
             raise ValueError(
                 f"{week}: expected "
@@ -329,7 +422,10 @@ def main():
                 f"found {len(group)}"
             )
 
-        if group["gateway_id"].nunique() != VISITS_PER_WEEK:
+        if (
+            group["gateway_id"].nunique()
+            != VISITS_PER_WEEK
+        ):
             raise ValueError(
                 f"{week}: duplicate gateway selected"
             )
@@ -338,7 +434,9 @@ def main():
             range(1, VISITS_PER_WEEK + 1)
         )
 
-        if sorted(group["rank"].tolist()) != expected_ranks:
+        if sorted(
+            group["rank"].tolist()
+        ) != expected_ranks:
             raise ValueError(
                 f"{week}: ranks are not exactly 1-15"
             )
@@ -347,6 +445,73 @@ def main():
         raise ValueError(
             "Prediction scores contain NaN values"
         )
+
+
+def parse_arguments():
+    """
+    Parse optional prediction-period arguments.
+
+    Running without arguments keeps the required Part 1
+    prediction period.
+    """
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate ML gateway rankings for a "
+            "specified weekly prediction period."
+        )
+    )
+
+    parser.add_argument(
+        "--start-week",
+        default=DEFAULT_START_WEEK,
+        help=(
+            "First prediction week in YYYY-MM-DD format. "
+            "Default: 2026-02-02"
+        ),
+    )
+
+    parser.add_argument(
+        "--weeks",
+        type=int,
+        default=DEFAULT_NUM_WEEKS,
+        help=(
+            "Number of weekly prediction periods. "
+            "Default: 8"
+        ),
+    )
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_arguments()
+
+    repo_root = Path(__file__).resolve().parent.parent
+
+    data_dir = repo_root / "data"
+
+    output_path = repo_root / "predictions.csv"
+
+    if not data_dir.exists():
+        raise FileNotFoundError(
+            f"Data directory not found: {data_dir}"
+        )
+
+    scored_weeks = get_scored_weeks(
+        start_week=args.start_week,
+        num_weeks=args.weeks,
+    )
+
+    predictions = build_predictions(
+        data_dir,
+        scored_weeks=scored_weeks,
+    )
+
+    validate_predictions(
+        predictions,
+        expected_weeks=scored_weeks,
+    )
 
     predictions.to_csv(
         output_path,
