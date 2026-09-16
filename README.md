@@ -6,7 +6,7 @@ The main goal of the project is to help the field team decide which gateways sho
 
 ---
 
-## 🎥 Project Demo
+## Project Demo
 
 A short screen recording showing my approach, implementation, evaluation, prediction pipeline, and final validation:
 
