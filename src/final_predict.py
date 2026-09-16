@@ -1,5 +1,6 @@
 from pathlib import Path
 import argparse
+import joblib
 
 import pandas as pd
 
@@ -24,7 +25,10 @@ DEFAULT_START_WEEK = "2026-02-02"
 DEFAULT_NUM_WEEKS = 8
 
 
-def get_scored_weeks(start_week=DEFAULT_START_WEEK, num_weeks=DEFAULT_NUM_WEEKS):
+def get_scored_weeks(
+    start_week=DEFAULT_START_WEEK,
+    num_weeks=DEFAULT_NUM_WEEKS,
+):
     """
     Return the weeks for which predictions should be generated.
 
@@ -53,6 +57,9 @@ def train_final_model(dataset):
     """
     Train the final ML model using historical labelled
     gateway-weeks only.
+
+    The complete trained preprocessing + Logistic Regression
+    pipeline is also saved as a .joblib model artifact.
     """
 
     dataset = dataset.copy()
@@ -111,7 +118,30 @@ def train_final_model(dataset):
         f"{y.mean():.2%}",
     )
 
+    # Train the complete pipeline.
     model.fit(X, y)
+
+    # ---------------------------------------------------------
+    # Save the trained ML model artifact.
+    # This includes:
+    #   1. Median imputation
+    #   2. Standard scaling
+    #   3. Logistic Regression classifier
+    #
+    # The challenge requires trained ML model files such as
+    # .pkl or .joblib to be included in the GitHub repository.
+    # ---------------------------------------------------------
+    repo_root = Path(__file__).resolve().parent.parent
+    models_dir = repo_root / "models"
+    models_dir.mkdir(exist_ok=True)
+
+    model_path = models_dir / "logistic_regression_model.joblib"
+
+    joblib.dump(model, model_path)
+
+    print(
+        f"Saved trained model: {model_path}"
+    )
 
     return model, feature_columns
 
