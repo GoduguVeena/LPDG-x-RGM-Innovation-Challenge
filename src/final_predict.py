@@ -1,39 +1,41 @@
-from pathlib import Path
 import argparse
-import joblib
+from pathlib import Path
 
+import joblib
 import pandas as pd
 
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from features import build_prediction_features
 
-from features import (
-    build_training_dataset,
-    build_prediction_features,
-)
-
-
-TARGET_THRESHOLD = 0.30
 VISITS_PER_WEEK = 15
 
-# Default Part 1 submission period.
-# Running the script without arguments produces the required
-# 8 weeks from 2026-02-02 to 2026-03-23.
+# Required Part 1 prediction period
 DEFAULT_START_WEEK = "2026-02-02"
 DEFAULT_NUM_WEEKS = 8
 
+# The trained model was built with 69 engineered features
+EXPECTED_FEATURES = 69
+
+
+# ============================================================
+# Prediction weeks
+# ============================================================
 
 def get_scored_weeks(
     start_week=DEFAULT_START_WEEK,
     num_weeks=DEFAULT_NUM_WEEKS,
 ):
     """
-    Return the weeks for which predictions should be generated.
+    Return the weekly prediction periods.
 
-    Defaults to the exact Part 1 submission period, while allowing
-    another prediction period for unseen-month evaluation.
+    Default:
+        2026-02-02
+        2026-02-09
+        2026-02-16
+        2026-02-23
+        2026-03-02
+        2026-03-09
+        2026-03-16
+        2026-03-23
     """
 
     if num_weeks < 1:
@@ -53,98 +55,105 @@ def get_scored_weeks(
     )
 
 
-def train_final_model(dataset):
+# ============================================================
+# Load trained model
+# ============================================================
+
+def load_final_model(repo_root):
     """
-    Train the final ML model using historical labelled
-    gateway-weeks only.
+    Load the already-trained ML pipeline.
 
-    The complete trained preprocessing + Logistic Regression
-    pipeline is also saved as a .joblib model artifact.
+    IMPORTANT:
+    This function ONLY loads the saved model.
+
+    There is NO:
+        model.fit()
+        build_training_dataset()
+        joblib.dump()
+
+    during prediction.
     """
 
-    dataset = dataset.copy()
+    model_path = (
+        repo_root
+        / "models"
+        / "logistic_regression_model.joblib"
+    )
 
-    dataset["target"] = (
-        dataset["failure_rate"] > TARGET_THRESHOLD
-    ).astype(int)
-
-    excluded_columns = [
-        "gateway_id",
-        "week_start",
-        "failure_rate",
-        "target",
-    ]
-
-    feature_columns = [
-        column
-        for column in dataset.columns
-        if column not in excluded_columns
-    ]
-
-    if len(feature_columns) != 69:
-        raise ValueError(
-            f"Expected 69 features, found {len(feature_columns)}"
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"Trained model not found: {model_path}\n"
+            "Run train_final.py first to create the model artifact."
         )
 
-    X = dataset[feature_columns]
-    y = dataset["target"]
+    print("\nLoading trained Logistic Regression model...")
 
-    model = Pipeline(
-        steps=[
-            (
-                "imputer",
-                SimpleImputer(strategy="median"),
-            ),
-            (
-                "scaler",
-                StandardScaler(),
-            ),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=2000,
-                    class_weight="balanced",
-                    random_state=42,
-                ),
-            ),
+    model = joblib.load(model_path)
+
+    print("Model loaded successfully.")
+
+    return model
+
+
+# ============================================================
+# Feature validation
+# ============================================================
+
+def get_feature_columns(model, prediction_features):
+    """
+    Determine the exact feature columns expected by the
+    trained model and make sure prediction data contains them.
+
+    The training pipeline was created using 69 engineered
+    features.
+    """
+
+    # Prefer the feature names stored by scikit-learn when
+    # the model was trained using a pandas DataFrame.
+    if hasattr(model, "feature_names_in_"):
+        feature_columns = list(model.feature_names_in_)
+
+    else:
+        excluded_columns = {
+            "gateway_id",
+            "week_start",
+            "failure_rate",
+            "target",
+            "score",
+            "reason",
+            "rank",
+        }
+
+        feature_columns = [
+            column
+            for column in prediction_features.columns
+            if column not in excluded_columns
         ]
-    )
 
-    print("\nTraining final Logistic Regression...")
-    print("Training rows:", len(dataset))
-    print("Features:", len(feature_columns))
-    print(
-        "Severe failure rate:",
-        f"{y.mean():.2%}",
-    )
+    if len(feature_columns) != EXPECTED_FEATURES:
+        raise ValueError(
+            f"Expected {EXPECTED_FEATURES} model features, "
+            f"found {len(feature_columns)}"
+        )
 
-    # Train the complete pipeline.
-    model.fit(X, y)
+    missing_features = [
+        column
+        for column in feature_columns
+        if column not in prediction_features.columns
+    ]
 
-    # ---------------------------------------------------------
-    # Save the trained ML model artifact.
-    # This includes:
-    #   1. Median imputation
-    #   2. Standard scaling
-    #   3. Logistic Regression classifier
-    #
-    # The challenge requires trained ML model files such as
-    # .pkl or .joblib to be included in the GitHub repository.
-    # ---------------------------------------------------------
-    repo_root = Path(__file__).resolve().parent.parent
-    models_dir = repo_root / "models"
-    models_dir.mkdir(exist_ok=True)
+    if missing_features:
+        raise ValueError(
+            "Prediction data is missing required features: "
+            + ", ".join(missing_features)
+        )
 
-    model_path = models_dir / "logistic_regression_model.joblib"
+    return feature_columns
 
-    joblib.dump(model, model_path)
 
-    print(
-        f"Saved trained model: {model_path}"
-    )
-
-    return model, feature_columns
-
+# ============================================================
+# Human-readable prediction reason
+# ============================================================
 
 def build_reason(row):
     """
@@ -171,7 +180,9 @@ def build_reason(row):
             )
 
     if not reasons:
-        return "Risk score based on available gateway telemetry"
+        return (
+            "Risk score based on available gateway telemetry"
+        )
 
     return (
         "Elevated predicted severe-failure risk based on "
@@ -179,33 +190,41 @@ def build_reason(row):
     )
 
 
+# ============================================================
+# Predict one week
+# ============================================================
+
 def predict_week(
     model,
-    feature_columns,
     prediction_features,
     week_start,
 ):
     """
-    Rank gateways for one prediction week.
+    Generate the ranked top 15 gateways for one prediction week.
+
+    IMPORTANT:
+    This function only performs inference.
+
+    It never trains or fits the model.
     """
 
     prediction_features = prediction_features.copy()
 
-    missing_features = [
-        column
-        for column in feature_columns
-        if column not in prediction_features.columns
-    ]
+    # Get the exact feature order expected by the trained model.
+    feature_columns = get_feature_columns(
+        model,
+        prediction_features,
+    )
 
-    if missing_features:
-        raise ValueError(
-            "Missing prediction features: "
-            + ", ".join(missing_features)
-        )
-
+    # Arrange prediction columns in exactly the same order
+    # used when training the model.
     X_prediction = prediction_features[
         feature_columns
     ]
+
+    # --------------------------------------------------------
+    # INFERENCE ONLY
+    # --------------------------------------------------------
 
     probabilities = model.predict_proba(
         X_prediction
@@ -213,14 +232,19 @@ def predict_week(
 
     prediction_features["score"] = probabilities
 
-    # Deterministic ordering:
-    # 1. highest predicted risk
+    # --------------------------------------------------------
+    # Deterministic ranking
+    #
+    # 1. Highest predicted severe-failure risk
     # 2. gateway_id alphabetically for ties
+    # --------------------------------------------------------
+
     prediction_features = prediction_features.sort_values(
         ["score", "gateway_id"],
         ascending=[False, True],
     ).reset_index(drop=True)
 
+    # Select top 15 gateways
     selected = prediction_features.head(
         VISITS_PER_WEEK
     ).copy()
@@ -228,18 +252,22 @@ def predict_week(
     if len(selected) != VISITS_PER_WEEK:
         raise ValueError(
             f"Expected {VISITS_PER_WEEK} gateways for "
-            f"{week_start.date()}, found {len(selected)}"
+            f"{week_start.date()}, "
+            f"found {len(selected)}"
         )
 
+    # Assign ranks 1-15
     selected["rank"] = range(
         1,
         VISITS_PER_WEEK + 1,
     )
 
+    # Store prediction week
     selected["week_start"] = (
         week_start.date().isoformat()
     )
 
+    # Generate explanation
     selected["reason"] = selected.apply(
         build_reason,
         axis=1,
@@ -256,13 +284,31 @@ def predict_week(
     ]
 
 
-def build_predictions(data_dir, scored_weeks=None):
-    """
-    Train on historical labelled data and generate
-    predictions for the requested prediction weeks.
+# ============================================================
+# Build predictions for all weeks
+# ============================================================
 
-    Training labels from the prediction period and any
-    later weeks are excluded to prevent target leakage.
+def build_predictions(
+    data_dir,
+    scored_weeks=None,
+):
+    """
+    Generate predictions for all requested weeks.
+
+    IMPORTANT:
+    No training is performed here.
+
+    Workflow:
+
+        Load saved model
+              ↓
+        Build prediction features
+              ↓
+        model.predict_proba()
+              ↓
+        Rank gateways
+              ↓
+        Select top 15
     """
 
     if scored_weeks is None:
@@ -275,11 +321,17 @@ def build_predictions(data_dir, scored_weeks=None):
             "At least one prediction week is required"
         )
 
+    repo_root = Path(__file__).resolve().parent.parent
+
     first_prediction_week = pd.Timestamp(
         scored_weeks[0]
     )
 
-    print("==========================================")
+    last_prediction_week = pd.Timestamp(
+        scored_weeks[-1]
+    )
+
+    print("\n==========================================")
     print("FINAL ML PREDICTION PIPELINE")
     print("==========================================")
 
@@ -287,43 +339,45 @@ def build_predictions(data_dir, scored_weeks=None):
     print(
         f"{first_prediction_week.date()} "
         f"to "
-        f"{pd.Timestamp(scored_weeks[-1]).date()}"
+        f"{last_prediction_week.date()}"
     )
 
-    print("\nBuilding historical training dataset...")
+    print("\nTraining is NOT performed during prediction.")
+    print("Loading pre-trained model...")
 
-    full_training_dataset = build_training_dataset(
-        data_dir
-    )
+    # --------------------------------------------------------
+    # Load the already-trained model
+    # --------------------------------------------------------
 
-    # Use only labels strictly before the first
-    # prediction week.
-    training_dataset = full_training_dataset[
-        full_training_dataset["week_start"]
-        < first_prediction_week
-    ].copy()
+    model = load_final_model(repo_root)
 
-    if training_dataset.empty:
+    # --------------------------------------------------------
+    # Validate loaded model
+    # --------------------------------------------------------
+
+    if not hasattr(model, "n_features_in_"):
         raise ValueError(
-            "No historical training rows exist before "
-            "the requested prediction period"
+            "Loaded model does not expose n_features_in_. "
+            "Expected the saved scikit-learn pipeline."
         )
 
     print(
-        "Full labelled dataset shape:",
-        full_training_dataset.shape,
+        "Loaded model feature count:",
+        model.n_features_in_,
     )
 
-    print(
-        "Leakage-safe training dataset shape:",
-        training_dataset.shape,
-    )
-
-    model, feature_columns = train_final_model(
-        training_dataset
-    )
+    if model.n_features_in_ != EXPECTED_FEATURES:
+        raise ValueError(
+            f"Expected model with "
+            f"{EXPECTED_FEATURES} features, "
+            f"found {model.n_features_in_}"
+        )
 
     all_predictions = []
+
+    # ========================================================
+    # Generate predictions week by week
+    # ========================================================
 
     for week_start in scored_weeks:
 
@@ -334,24 +388,41 @@ def build_predictions(data_dir, scored_weeks=None):
         else:
             week_start = week_start.tz_convert("UTC")
 
+        print("\n------------------------------------------")
         print(
-            f"\nGenerating predictions for "
+            f"Generating predictions for "
             f"{week_start.date()}..."
         )
+        print("------------------------------------------")
+
+        # ----------------------------------------------------
+        # Build ONLY prediction features
+        #
+        # No training dataset is created.
+        # ----------------------------------------------------
 
         features = build_prediction_features(
             data_dir,
             week_start,
         )
 
+        if features.empty:
+            raise ValueError(
+                f"No prediction features generated for "
+                f"{week_start.date()}"
+            )
+
         print(
             "Candidate gateways:",
             features["gateway_id"].nunique(),
         )
 
+        # ----------------------------------------------------
+        # Generate predictions
+        # ----------------------------------------------------
+
         prediction = predict_week(
             model,
-            feature_columns,
             features,
             week_start,
         )
@@ -374,6 +445,10 @@ def build_predictions(data_dir, scored_weeks=None):
 
         all_predictions.append(prediction)
 
+    # ========================================================
+    # Combine weekly predictions
+    # ========================================================
+
     predictions = pd.concat(
         all_predictions,
         ignore_index=True,
@@ -382,13 +457,17 @@ def build_predictions(data_dir, scored_weeks=None):
     return predictions
 
 
+# ============================================================
+# Validate final prediction dataframe
+# ============================================================
+
 def validate_predictions(
     predictions,
     expected_weeks,
 ):
     """
-    Validate the structural requirements of the generated
-    prediction file.
+    Validate structural requirements of the final
+    predictions dataframe.
     """
 
     expected_columns = [
@@ -399,16 +478,25 @@ def validate_predictions(
         "reason",
     ]
 
+    # --------------------------------------------------------
+    # Column validation
+    # --------------------------------------------------------
+
     if list(predictions.columns) != expected_columns:
         raise ValueError(
             "Unexpected prediction columns: "
             f"{list(predictions.columns)}"
         )
 
+    # --------------------------------------------------------
+    # Row count validation
+    # --------------------------------------------------------
+
     expected_week_count = len(expected_weeks)
 
     expected_row_count = (
-        expected_week_count * VISITS_PER_WEEK
+        expected_week_count
+        * VISITS_PER_WEEK
     )
 
     if len(predictions) != expected_row_count:
@@ -416,6 +504,10 @@ def validate_predictions(
             f"Expected {expected_row_count} prediction rows, "
             f"found {len(predictions)}"
         )
+
+    # --------------------------------------------------------
+    # Week count validation
+    # --------------------------------------------------------
 
     if (
         predictions["week_start"].nunique()
@@ -426,8 +518,14 @@ def validate_predictions(
             f"{expected_week_count} weeks"
         )
 
+    # --------------------------------------------------------
+    # Exact week validation
+    # --------------------------------------------------------
+
     expected_week_strings = {
-        pd.Timestamp(week).date().isoformat()
+        pd.Timestamp(week)
+        .date()
+        .isoformat()
         for week in expected_weeks
     }
 
@@ -441,10 +539,15 @@ def validate_predictions(
             "requested prediction period"
         )
 
+    # --------------------------------------------------------
+    # Validate every week's rankings
+    # --------------------------------------------------------
+
     for week, group in predictions.groupby(
         "week_start"
     ):
 
+        # Exactly 15 gateways
         if len(group) != VISITS_PER_WEEK:
             raise ValueError(
                 f"{week}: expected "
@@ -452,6 +555,7 @@ def validate_predictions(
                 f"found {len(group)}"
             )
 
+        # No duplicate gateway
         if (
             group["gateway_id"].nunique()
             != VISITS_PER_WEEK
@@ -460,29 +564,45 @@ def validate_predictions(
                 f"{week}: duplicate gateway selected"
             )
 
+        # Ranks must be exactly 1-15
         expected_ranks = list(
-            range(1, VISITS_PER_WEEK + 1)
+            range(
+                1,
+                VISITS_PER_WEEK + 1,
+            )
         )
 
-        if sorted(
+        actual_ranks = sorted(
             group["rank"].tolist()
-        ) != expected_ranks:
+        )
+
+        if actual_ranks != expected_ranks:
             raise ValueError(
                 f"{week}: ranks are not exactly 1-15"
             )
+
+    # --------------------------------------------------------
+    # Score validation
+    # --------------------------------------------------------
 
     if predictions["score"].isna().any():
         raise ValueError(
             "Prediction scores contain NaN values"
         )
 
+    print("\nPrediction validation: PASSED")
+
+
+# ============================================================
+# Command-line arguments
+# ============================================================
 
 def parse_arguments():
     """
     Parse optional prediction-period arguments.
 
-    Running without arguments keeps the required Part 1
-    prediction period.
+    Running without arguments generates the required
+    Part 1 period.
     """
 
     parser = argparse.ArgumentParser(
@@ -514,39 +634,76 @@ def parse_arguments():
     return parser.parse_args()
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main():
+
     args = parse_arguments()
 
-    repo_root = Path(__file__).resolve().parent.parent
+    # Repository root
+    repo_root = (
+        Path(__file__)
+        .resolve()
+        .parent
+        .parent
+    )
 
+    # Input data directory
     data_dir = repo_root / "data"
 
+    # Final output file
     output_path = repo_root / "predictions.csv"
+
+    # --------------------------------------------------------
+    # Check data directory
+    # --------------------------------------------------------
 
     if not data_dir.exists():
         raise FileNotFoundError(
             f"Data directory not found: {data_dir}"
         )
 
+    # --------------------------------------------------------
+    # Determine prediction weeks
+    # --------------------------------------------------------
+
     scored_weeks = get_scored_weeks(
         start_week=args.start_week,
         num_weeks=args.weeks,
     )
+
+    # --------------------------------------------------------
+    # Generate predictions
+    # --------------------------------------------------------
 
     predictions = build_predictions(
         data_dir,
         scored_weeks=scored_weeks,
     )
 
+    # --------------------------------------------------------
+    # Validate predictions
+    # --------------------------------------------------------
+
     validate_predictions(
         predictions,
         expected_weeks=scored_weeks,
     )
 
+    # --------------------------------------------------------
+    # Save predictions.csv
+    # --------------------------------------------------------
+
     predictions.to_csv(
         output_path,
         index=False,
     )
+
+    # --------------------------------------------------------
+    # Final summary
+    # --------------------------------------------------------
 
     print("\n==========================================")
     print("FINAL PREDICTIONS CREATED")
@@ -568,11 +725,21 @@ def main():
 
     print(
         "Gateways per week:",
-        predictions.groupby(
-            "week_start"
-        )["gateway_id"].nunique().tolist(),
+        predictions
+        .groupby("week_start")
+        ["gateway_id"]
+        .nunique()
+        .tolist(),
     )
 
+    print("\n==========================================")
+    print("PIPELINE COMPLETE")
+    print("==========================================")
+
+
+# ============================================================
+# Entry point
+# ============================================================
 
 if __name__ == "__main__":
     main()
