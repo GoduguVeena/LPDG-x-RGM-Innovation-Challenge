@@ -246,16 +246,20 @@ This was a supporting generalization check and was **not** the official challeng
 
 ## 11. Ranking and Prediction
 
+## 11. Ranking and Prediction
+
 The final prediction process:
 
 1. Loads the available data.
 2. Builds the telemetry features.
-3. Trains the model using labelled historical weeks before the prediction period.
+3. Loads the pre-trained Logistic Regression model from the saved model artifact.
 4. Calculates a risk score for each candidate gateway.
 5. Sorts gateways by predicted risk.
 6. Uses `gateway_id` as a deterministic tie-breaker.
 7. Selects exactly 15 gateways for each week.
 8. Writes the final predictions to `predictions.csv`.
+
+Training and prediction are separate steps. The final prediction pipeline does not retrain the model.
 
 The output contains:
 
@@ -269,9 +273,9 @@ reason
 
 For the Part 1 prediction period, the output contains:
 
-- **8 weeks**
-- **15 gateways per week**
-- **120 rows**
+* 8 weeks
+* 15 gateways per week
+* 120 rows
 
 The prediction weeks are:
 
@@ -286,9 +290,8 @@ The prediction weeks are:
 2026-03-23
 ```
 
-The generated file is checked using the provided `validate_submission.py`.
+-- The generated file is checked using the provided `validate_submission.py`.
 
----
 
 ## 12. How to Run
 
