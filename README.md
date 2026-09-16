@@ -246,8 +246,6 @@ This was a supporting generalization check and was **not** the official challeng
 
 ## 11. Ranking and Prediction
 
-## 11. Ranking and Prediction
-
 The final prediction process:
 
 1. Loads the available data.
