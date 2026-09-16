@@ -6,6 +6,14 @@ The main goal of the project is to help the field team decide which gateways sho
 
 ---
 
+## 🎥 Project Demo
+
+A short screen recording showing my approach, implementation, evaluation, prediction pipeline, and final validation:
+
+[Watch the Project Demo](https://drive.google.com/file/d/1Qca6lUQYkmXHX2T3WO3Z0TEneHrBiyTJ/view?usp=sharing)
+
+---
+
 ## 1. Problem I Worked On
 
 There are around 320 gateways, but the field team can visit only 15 gateways in a week.
